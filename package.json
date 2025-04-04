@@ -1,0 +1,20 @@
+{
+  "dependencies": {
+    "dns": "^0.2.2",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "mongoose": "^8.13.1",
+    "ping": "^0.4.4",
+    "whois": "^2.14.2"
+  },
+  "name": "dnscheck",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}
