@@ -51,7 +51,7 @@ async function sendTelegramMessage(domain, isAvailable) {
 async function checkDomainAvailability(domain) {
   return new Promise((resolve) => {
     const socket = new net.Socket();
-    const port = 80;
+    const port = 443; // Меняем на 443 для HTTPS
 
     socket.setTimeout(3000);
     socket.on("connect", async () => {
@@ -66,7 +66,6 @@ async function checkDomainAvailability(domain) {
     });
     socket.on("timeout", async () => {
       console.log(`❌ Домен ${domain} недоступен (таймаут).`);
-      console.log(`❌ Статус домена ${domain} изменен на неактивный`);
       await DomainSchema.findOneAndUpdate(
         { domain },
         { active: false },
@@ -75,12 +74,11 @@ async function checkDomainAvailability(domain) {
       socket.destroy();
       resolve({
         isAvailable: false,
-        message: `❌ Домен ${domain} недоступен (ошибка подключения).`,
+        message: `❌ Домен ${domain} недоступен (таймаут).`,
       });
     });
-    socket.on("error", async () => {
-      console.log(`❌ Домен ${domain} недоступен (ошибка подключения).`);
-      console.log(`❌ Статус домена ${domain} изменен на неактивный`);
+    socket.on("error", async (err) => {
+      console.log(`❌ Домен ${domain} недоступен (ошибка: ${err.message}).`);
       await DomainSchema.findOneAndUpdate(
         { domain },
         { active: false },
