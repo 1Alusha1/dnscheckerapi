@@ -1,10 +1,10 @@
-const express = require("express");
-const dns = require("dns");
-const net = require("net");
-const db = require("./db.js");
-const dotenv = require("dotenv");
+const express = require('express');
+const dns = require('dns');
+const net = require('net');
+const db = require('./db.js');
+const dotenv = require('dotenv');
 dotenv.config();
-const DomainSchema = require("./domain.js");
+const DomainSchema = require('./domain.js');
 
 db().catch((err) => console.log(err));
 
@@ -20,7 +20,7 @@ async function sendTelegramMessage(domain, isAvailable) {
   const botToken = process.env.BOT_TOKEN;
 
   if (!botToken || !userId) {
-    console.error("Не указаны BOT_TOKEN или TG_USER_ID в .env");
+    console.error('Не указаны BOT_TOKEN или TG_USER_ID в .env');
     return;
   }
   if (!user.displayed) {
@@ -30,9 +30,9 @@ async function sendTelegramMessage(domain, isAvailable) {
           message
         )}`,
         {
-          method: "POST",
+          method: 'POST',
           headers: {
-            "Content-Type": "application/json",
+            'Content-Type': 'application/json',
           },
         }
       );
@@ -43,7 +43,7 @@ async function sendTelegramMessage(domain, isAvailable) {
       );
       console.log(`Уведомление отправлено: ${message}`);
     } catch (error) {
-      console.error("Ошибка при отправке в Telegram:", error);
+      console.error('Ошибка при отправке в Telegram:', error);
     }
   }
 }
@@ -54,7 +54,7 @@ async function checkDomainAvailability(domain) {
     const port = 443; // Меняем на 443 для HTTPS
 
     socket.setTimeout(3000);
-    socket.on("connect", async () => {
+    socket.on('connect', async () => {
       console.log(`✅ Домен ${domain} доступен.`);
       await DomainSchema.findOneAndUpdate(
         { domain },
@@ -64,7 +64,7 @@ async function checkDomainAvailability(domain) {
       socket.end();
       resolve({ isAvailable: true, message: `✅ Домен ${domain} доступен.` });
     });
-    socket.on("timeout", async () => {
+    socket.on('timeout', async () => {
       console.log(`❌ Домен ${domain} недоступен (таймаут).`);
       await DomainSchema.findOneAndUpdate(
         { domain },
@@ -77,7 +77,7 @@ async function checkDomainAvailability(domain) {
         message: `❌ Домен ${domain} недоступен (таймаут).`,
       });
     });
-    socket.on("error", async (err) => {
+    socket.on('error', async (err) => {
       console.log(`❌ Домен ${domain} недоступен (ошибка: ${err.message}).`);
       await DomainSchema.findOneAndUpdate(
         { domain },
@@ -105,17 +105,17 @@ async function checkDomains() {
   }
 }
 
-app.get("/check-domains", async (req, res) => {
+app.get('/check-domains', async (req, res) => {
   try {
     await checkDomains();
-    res.status(200).send("Domains checked");
+    res.status(200).send('Domains checked');
   } catch (error) {
     if (error) console.log(error);
-    res.status(500).send("Error occurred while checking domains");
+    res.status(500).send('Error occurred while checking domains');
   }
 });
 
-app.get("/check-own/:userId", async (req, res) => {
+app.get('/check-own/:userId', async (req, res) => {
   const { userId } = req.params;
 
   try {
@@ -130,9 +130,9 @@ app.get("/check-own/:userId", async (req, res) => {
             process.env.BOT_TOKEN
           }/sendMessage?chat_id=${userId}&text=${encodeURIComponent(message)}`,
           {
-            method: "POST",
+            method: 'POST',
             headers: {
-              "Content-Type": "application/json",
+              'Content-Type': 'application/json',
             },
           }
         );
@@ -143,13 +143,28 @@ app.get("/check-own/:userId", async (req, res) => {
         );
         console.log(`Уведомление отправлено: ${message}`);
       } catch (error) {
-        console.error("Ошибка при отправке в Telegram:", error);
+        console.error('Ошибка при отправке в Telegram:', error);
       }
     }
-    res.status(200).send("Domains checked");
+    res.status(200).send('Domains checked');
   } catch (error) {
     if (error) console.log(error);
-    res.status(500).send("Error occurred while checking own domains");
+    res.status(500).send('Error occurred while checking own domains');
+  }
+});
+
+app.get('/not-active', async (req, res) => {
+  try {
+    const records = await DomainSchema.find({ active: false });
+
+    if (!records) {
+      return res.status(200).send('Every domain works');
+    }
+
+    res.status(200).json({ records, count: records.length });
+  } catch (error) {
+    if (error) console.log(error);
+    res.status(500).send('Error occurred while getting not active domains');
   }
 });
 
