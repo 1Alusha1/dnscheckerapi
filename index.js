@@ -148,7 +148,6 @@ app.get('/check-own/:userId', async (req, res) => {
           : `✅ Домен ${domain} доступен.`;
 
         try {
-          if (!isAvailable) {
             await fetch(
               `https://api.telegram.org/bot${
                 process.env.BOT_TOKEN
@@ -166,8 +165,6 @@ app.get('/check-own/:userId', async (req, res) => {
               { displayed: true },
               { new: true }
             );
-          } else {
-          }
           console.log(`📨 Уведомление для ${userId}: ${message}`);
         } catch (err) {
           console.error('Ошибка отправки Telegram для пользователя:', err);
