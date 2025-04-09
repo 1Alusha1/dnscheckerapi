@@ -11,7 +11,7 @@ const { default: mongoose } = require('mongoose');
 const app = express();
 const port = process.env.PORT || 8080;
 
-async function sendTelegramMessage(domain) {
+async function sendTelegramMessage(domain, dnsFlag = false, msg = '') {
   const user = await DomainSchema.findOne({ domain });
   const botToken = process.env.BOT_TOKEN;
 
@@ -22,7 +22,7 @@ async function sendTelegramMessage(domain) {
 
   if (user.displayed) return;
 
-  const message = `⚠️ Домен ${domain} недоступен!`;
+  const message = !dnsFlag ? `⚠️ Домен ${domain} недоступен!` : msg;
 
   try {
     await fetch(
@@ -48,101 +48,61 @@ async function sendTelegramMessage(domain) {
 }
 
 async function checkDomainAvailability(domain) {
-  const port = 443;
-  const socket = new net.Socket();
-  let resolved = false;
+  return new Promise(async (resolve) => {
+    const socket = new net.Socket();
+    const port = 443;
+    let resolved = false;
 
-  socket.setTimeout(3000);
+    socket.setTimeout(3000);
 
-  const dnsCheck = checkDomainByDNS(domain); // запустим параллельно
+    const finish = async (isAvailable, logMsg) => {
+      if (resolved) return;
+      resolved = true;
 
-  const finish = async (isAvailable, logMsg) => {
-    if (resolved) return;
-    resolved = true;
+      try {
+        const current = await DomainSchema.findOne({ domain });
+        if (!current) return;
+
+        if (current.active !== isAvailable) {
+          await DomainSchema.findOneAndUpdate(
+            { domain },
+            {
+              active: isAvailable,
+              displayed: isAvailable ? false : current.displayed,
+            },
+            { new: true }
+          );
+        }
+
+        console.log(logMsg);
+        resolve({ isAvailable, logMsg });
+      } catch (e) {
+        console.error('Ошибка при обновлении MongoDB:', e);
+        resolve({ isAvailable: false, logMsg: e.message });
+      }
+    };
+
+    socket.on('connect', () => {
+      socket.end();
+      finish(true, `✅ Домен ${domain} доступен.`);
+    });
+
+    socket.on('timeout', () => {
+      socket.destroy();
+      finish(false, `❌ Домен ${domain} недоступен (таймаут).`);
+    });
+
+    socket.on('error', (err) => {
+      socket.destroy();
+      finish(false, `❌ Домен ${domain} недоступен (ошибка: ${err.message}).`);
+    });
 
     try {
-      const current = await DomainSchema.findOne({ domain });
-      if (!current) return;
-
-      if (current.active !== isAvailable) {
-        await DomainSchema.findOneAndUpdate(
-          { domain },
-          {
-            active: isAvailable,
-            displayed: isAvailable ? false : current.displayed,
-          },
-          { new: true }
-        );
-      }
-
-      console.log(logMsg);
-    } catch (e) {
-      console.error('Ошибка при обновлении MongoDB:', e);
+      socket.connect(port, domain);
+    } catch (err) {
+      finish(false, `❌ Ошибка подключения к ${domain}: ${err.message}`);
     }
-  };
-
-  socket.on('connect', () => {
-    socket.end();
-    finish(true, `✅ Домен ${domain} доступен (по порту).`);
   });
-
-  socket.on('timeout', () => {
-    socket.destroy();
-    finish(false, `❌ Домен ${domain} недоступен (таймаут порта).`);
-  });
-
-  socket.on('error', (err) => {
-    socket.destroy();
-    finish(
-      false,
-      `❌ Домен ${domain} недоступен (ошибка порта: ${err.message}).`
-    );
-  });
-
-  try {
-    socket.connect(port, domain);
-  } catch (err) {
-    finish(false, `❌ Ошибка подключения к ${domain}: ${err.message}`);
-  }
-
-  try {
-    await dnsCheck;
-  } catch (e) {
-  }
-
-  return new Promise((resolve) => {
-    // таймаут на всякий случай
-    setTimeout(() => {
-      if (!resolved) {
-        socket.destroy();
-        finish(
-          false,
-          `❌ Домен ${domain} не дал ответ по порту и таймаут вышел.`
-        );
-      }
-      resolve({ isAvailable: resolved }); // результат с учетом порта
-    }, 4000);
-  });
-}
-
-async function checkDomains() {
-  const domains = await DomainSchema.find();
-  const limit = pLimit(10); // максимум 10 параллельных задач
-
-  const checks = domains.map(({ domain }) =>
-    limit(async () => {
-      const { isAvailable } = await checkDomainAvailability(domain);
-      const {} = await checkDomainByDNS(domain);
-
-      if (!isAvailable) {
-        console.log(domain + " ins't work")
-        await sendTelegramMessage(domain);
-      }
-    })
-  );
-
-  await Promise.allSettled(checks);
-  console.log('✅ Проверка доменов завершена.');
 }
 
 const providers = {
@@ -163,11 +123,13 @@ async function resolveWithServer(domain, server) {
 }
 
 async function checkDomainByDNS(domain) {
+  let msg = '';
+  let success = true;
+
   for (const [name, servers] of Object.entries(providers)) {
     const serverList = Array.isArray(servers) ? servers : [servers];
 
-    let success = false;
-
+    let providerSuccess = false;
     for (const server of serverList) {
       try {
         const addresses = await resolveWithServer(domain, server);
@@ -176,10 +138,10 @@ async function checkDomainByDNS(domain) {
             ', '
           )}`
         );
-        success = true;
-        break; // как только один из серверов сработал — достаточно
+        msg += `\n✅ Домен: ${domain} доступен  через ${name}`;
+        providerSuccess = true;
+        break;
       } catch (err) {
-        // Переходим к следующему серверу, если есть
         console.log(
           `⚠️ ${domain} не доступен через ${name} (${server}): ${
             err.code || err.message
@@ -188,21 +150,39 @@ async function checkDomainByDNS(domain) {
       }
     }
 
-    if (!success) {
-      console.log(
-        `❌ ${domain} не доступен через ${name}: все серверы не ответили`
-      );
+    if (!providerSuccess) {
+      success = false;
+      msg += `\n❌ Домен: ${domain} не доступен через ${name}`;
     }
   }
+
+  return { success, msg };
+}
+
+async function checkDomains() {
+  const domains = await DomainSchema.find();
+  const limit = pLimit(10);
+
+  const checks = domains.map(({ domain }) =>
+    limit(async () => {
+      const { isAvailable } = await checkDomainAvailability(domain);
+      const { success, msg } = await checkDomainByDNS(domain);
+      if (!success) await sendTelegramMessage(domain, true, msg);
+      if (!isAvailable) await sendTelegramMessage(domain);
+    })
+  );
+
+  await Promise.allSettled(checks);
+  console.log('✅ Проверка доменов завершена.');
 }
 
 app.get('/check-domains', async (req, res) => {
   try {
     await checkDomains();
-    res.status(200).send('Domains checked');
+    res.status(200).json({ message: '✅ Проверка доменов завершена' });
   } catch (error) {
-    if (error) console.log(error);
-    res.status(500).send('Error occurred while checking domains');
+    console.error(error);
+    res.status(500).json({ error: '❌ Ошибка при проверке доменов' });
   }
 });
 
@@ -211,21 +191,29 @@ app.get('/check-own/:userId', async (req, res) => {
 
   try {
     const userDomains = await DomainSchema.find({ userId });
-    const limit = pLimit(10); // ограничим до 10 параллельных проверок
+    const limit = pLimit(10);
+    const results = [];
 
     const checks = userDomains.map(({ domain }) =>
       limit(async () => {
-        const { isAvailable } = await checkDomainAvailability(domain);
-        const message = !isAvailable
-          ? `⚠️ Домен ${domain} недоступен!`
-          : `✅ Домен ${domain} доступен.`;
+        const { isAvailable, logMsg } = await checkDomainAvailability(domain);
+        const { success, msg } = await checkDomainByDNS(domain);
+
+        const fullMessage = `${logMsg}\n${msg}`;
+
+        results.push({
+          domain,
+          isAvailable,
+          dnsSuccess: success,
+          message: fullMessage,
+        });
 
         try {
           await fetch(
             `https://api.telegram.org/bot${
               process.env.BOT_TOKEN
             }/sendMessage?chat_id=${userId}&text=${encodeURIComponent(
-              message
+              fullMessage
             )}`,
             {
               method: 'POST',
@@ -233,12 +221,7 @@ app.get('/check-own/:userId', async (req, res) => {
             }
           );
 
-          await DomainSchema.findOneAndUpdate(
-            { domain },
-            { displayed: true },
-            { new: true }
-          );
-          console.log(`📨 Уведомление для ${userId}: ${message}`);
+          console.log(`📨 Уведомление для ${userId}: ${fullMessage}`);
         } catch (err) {
           console.error('Ошибка отправки Telegram для пользователя:', err);
         }
@@ -246,22 +229,24 @@ app.get('/check-own/:userId', async (req, res) => {
     );
 
     await Promise.allSettled(checks);
-    res.status(200).send('✅ Проверка доменов завершена');
+    res.status(200).json({ message: '✅ Проверка доменов завершена', results });
   } catch (error) {
     console.error('Ошибка при проверке пользовательских доменов:', error);
-    res.status(500).send('❌ Ошибка при проверке пользовательских доменов');
+    res
+      .status(500)
+      .json({ error: '❌ Ошибка при проверке пользовательских доменов' });
   }
 });
 
 app.get('/check-one/:domain', async (req, res) => {
   try {
     const { domain } = req.params;
-    const data = await checkDomainAvailability(domain);
-    console.log(data);
-    res.status(200).send('Domains checked');
+    const availability = await checkDomainAvailability(domain);
+    const dnsResult = await checkDomainByDNS(domain);
+    res.status(200).json({ domain, ...availability, ...dnsResult });
   } catch (error) {
-    if (error) console.log(error);
-    res.status(500).send('Error occurred while checking domain');
+    console.error(error);
+    res.status(500).json({ error: '❌ Ошибка при проверке домена' });
   }
 });
 
@@ -269,14 +254,20 @@ app.get('/not-active', async (req, res) => {
   try {
     const records = await DomainSchema.find({ active: false });
 
-    if (!records) {
-      return res.status(200).send('Every domain works');
+    if (!records?.length) {
+      return res.status(200).json({ message: '✅ Все домены работают' });
     }
 
-    res.status(200).json({ records, count: records.length });
+    res.status(200).json({
+      message: '❌ Есть недоступные домены',
+      records,
+      count: records.length,
+    });
   } catch (error) {
-    if (error) console.log(error);
-    res.status(500).send('Error occurred while getting not active domains');
+    console.error(error);
+    res
+      .status(500)
+      .json({ error: '❌ Ошибка при получении недоступных доменов' });
   }
 });
 
