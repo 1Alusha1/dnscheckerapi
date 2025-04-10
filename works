@@ -12,39 +12,42 @@ const app = express();
 const port = process.env.PORT || 8080;
 
 async function sendTelegramMessage(domain, message) {
+  const users = await DomainSchema.find({ domain });
   const botToken = process.env.BOT_TOKEN;
 
-  while (true) {
-    const user = await DomainSchema.findOneAndUpdate(
-      { domain, displayed: false },
-      { $set: { displayed: true } }
-    );
+  if (users.length) {
+    users.forEach(async (user) => {
+      if (!botToken || !user?.userId) {
+        console.error('Не указаны BOT_TOKEN или userId');
+        return;
+      }
 
-    if (!user) break; // Нет больше необработанных пользователей
+      if (user.displayed) return;
 
-    if (!botToken || !user?.userId) {
-      console.error('Не указаны BOT_TOKEN или userId');
-      continue;
-    }
+      try {
+        await fetch(
+          `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${
+            user.userId
+          }&text=${encodeURIComponent(message)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
 
-    try {
-      await fetch(
-        `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${user.userId}&text=${encodeURIComponent(message)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        }
-      );
+        await DomainSchema.updateMany(
+          { domain },
+          { displayed: true },
+          { new: true }
+        );
 
-      console.log(
-        `📨 Уведомление отправлено пользователю ${user.userId} для домена ${domain}: ${message}`
-      );
-    } catch (err) {
-      console.error('Ошибка при отправке Telegram:', err);
-    }
+        console.log(`📨 Уведомление отправлено: ${message}`);
+      } catch (err) {
+        console.error('Ошибка при отправке Telegram:', err);
+      }
+    });
   }
 }
-
 
 const providers = {
   Yandex: '77.88.8.8',
