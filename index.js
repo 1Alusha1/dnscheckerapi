@@ -1,7 +1,8 @@
 const express = require('express');
 const dns = require('dns');
 const net = require('net');
-const db = require('./db.js');
+const tls = require('tls');
+
 const dotenv = require('dotenv');
 dotenv.config();
 const pLimit = require('p-limit');
@@ -29,7 +30,9 @@ async function sendTelegramMessage(domain, message) {
 
     try {
       await fetch(
-        `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${user.userId}&text=${encodeURIComponent(message)}`,
+        `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${
+          user.userId
+        }&text=${encodeURIComponent(message)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -44,7 +47,6 @@ async function sendTelegramMessage(domain, message) {
     }
   }
 }
-
 
 const providers = {
   Yandex: '77.88.8.8',
@@ -63,13 +65,64 @@ async function resolveWithServer(domain, server) {
   });
 }
 
+async function checkSSL(domain) {
+  return new Promise((resolve) => {
+    const options = {
+      host: domain,
+      port: 443,
+      servername: domain,
+      rejectUnauthorized: false,
+    };
+
+    const socket = tls.connect(options, () => {
+      const cert = socket.getPeerCertificate();
+      let msg = '';
+
+      if (!cert || !Object.keys(cert).length) {
+        msg = `❌ SSL: ${domain} — сертификат не получен`;
+        socket.end();
+        return resolve({ valid: false, msg });
+      }
+
+      // Проверка срока действия
+      const now = new Date();
+      const validFrom = new Date(cert.valid_from);
+      const validTo = new Date(cert.valid_to);
+
+      if (now < validFrom || now > validTo) {
+        msg = `❌ SSL: ${domain} — сертификат просрочен (срок: ${cert.valid_from} - ${cert.valid_to})`;
+        socket.end();
+        return resolve({ valid: false, msg });
+      }
+
+      msg = `✅ SSL: ${domain} — сертификат действителен до ${cert.valid_to}`;
+      socket.end();
+      resolve({ valid: true, msg });
+    });
+
+    socket.on('error', (err) => {
+      resolve({
+        valid: false,
+        msg: `❌ SSL: ${domain} — ошибка SSL-соединения: ${err.message}`,
+      });
+    });
+
+    socket.setTimeout(5000, () => {
+      socket.destroy();
+      resolve({
+        valid: false,
+        msg: `❌ SSL: ${domain} — таймаут SSL-соединения`,
+      });
+    });
+  });
+}
+
 async function checkDomainStatus(domain) {
   let msg = '';
   let isAvailable = true;
 
   const socketCheck = await new Promise((resolve) => {
     const socket = new net.Socket();
-    let resultLogged = false;
 
     socket.setTimeout(3000);
 
@@ -104,13 +157,20 @@ async function checkDomainStatus(domain) {
     return { isAvailable, msg };
   }
 
+  const sslCheck = await checkSSL(domain);
+  msg += sslCheck.msg + '\n';
+
+  if (!sslCheck.valid) {
+    isAvailable = false;
+    return { isAvailable, msg };
+  }
+
   for (const [name, servers] of Object.entries(providers)) {
     const serverList = Array.isArray(servers) ? servers : [servers];
     let providerSuccess = false;
 
     for (const server of serverList) {
       try {
-        const addresses = await resolveWithServer(domain, server);
         msg += `✅ DNS: ${domain} доступен через ${name} \n`;
         providerSuccess = true;
       } catch (err) {
