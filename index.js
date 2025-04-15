@@ -53,6 +53,18 @@ const providers = {
   MTS: ['134.17.4.251'],
 };
 
+async function resolveWithServer(domain, server) {
+  const resolver = new dns.Resolver();
+  resolver.setServers([server]);
+
+  return new Promise((resolve, reject) => {
+    resolver.resolve4(domain, (err, addresses) => {
+      if (err) reject(err);
+      else resolve(addresses);
+    });
+  });
+}
+
 const checkSafe = async (domain) => {
   const dto = {
     threatInfo: {
@@ -104,7 +116,10 @@ const checkSafe = async (domain) => {
     };
   }
   if (response.status === 429) {
-    return { msg: '⚠️ Google Safe: Превышен лимит проверок', isAvailable: false };
+    return {
+      msg: '⚠️ Google Safe: Превышен лимит проверок',
+      isAvailable: false,
+    };
   }
 };
 
