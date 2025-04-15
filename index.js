@@ -222,6 +222,7 @@ async function checkDomainStatus(domain) {
 
     for (const server of serverList) {
       try {
+        await resolveWithServer(domain, server) 
         msg += `✅ DNS: ${domain} доступен через ${name} \n`;
         providerSuccess = true;
       } catch (err) {
