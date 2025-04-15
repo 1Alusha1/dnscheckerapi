@@ -78,30 +78,34 @@ const checkSafe = async (domain) => {
   );
   const data = await response.json();
 
-  const types = {
-    MALWARE: 'ЗЛОУМЫШЛЕННИКИ',
-    SOCIAL_ENGINEERING: 'СОЦИАЛЬНАЯ ИНЖЕНЕРИЯ',
-    UNWANTED_SOFTWARE: 'НЕЖЕЛАТЕЛЬНОЕ ПРОГРАММНОЕ ОБЕСПЕЧЕНИЕ',
-    POTENTIALLY_HARMFUL_APPLICATION: 'ПОТЕНЦИАЛЬНО ВРЕДНОЕ ПРИМЕНЕНИЕ',
-  };
+  if (response.ok) {
+    const types = {
+      MALWARE: 'ЗЛОУМЫШЛЕННИКИ',
+      SOCIAL_ENGINEERING: 'СОЦИАЛЬНАЯ ИНЖЕНЕРИЯ',
+      UNWANTED_SOFTWARE: 'НЕЖЕЛАТЕЛЬНОЕ ПРОГРАММНОЕ ОБЕСПЕЧЕНИЕ',
+      POTENTIALLY_HARMFUL_APPLICATION: 'ПОТЕНЦИАЛЬНО ВРЕДНОЕ ПРИМЕНЕНИЕ',
+    };
 
-  if (!Object.keys(data).length) {
+    if (!Object.keys(data).length) {
+      return {
+        msg: `✅ Google Safe: ${domain} считаеться безопасным`,
+        isAvailable: true,
+      };
+    }
+
+    const type = data.matches.reduce((acc, type) => {
+      acc += types[type.threatType] + ' ';
+      return acc;
+    }, '');
+
     return {
-      msg: `✅ Google Safe: ${domain} считаеться безопасным `,
-      isAvailable: true,
+      msg: `❌ Google Safe: ${domain} помечен как ${type} `,
+      isAvailable: false,
     };
   }
-
-  const type = data.matches.reduce((acc, type) => {
-    acc += types[type.threatType] + ' ';
-    return acc;
-  }, '');
-
-
-  return {
-    msg: `❌ Google Safe: ${domain} помечен как ${type} `,
-    isAvailable: false,
-  };
+  if (response.status === 429) {
+    return { msg: '⚠️ Google Safe: Превышен лимит проверок', isAvailable: false };
+  }
 };
 
 async function checkSSL(domain) {
@@ -238,6 +242,7 @@ async function checkDomains() {
   const checks = domains.map(({ domain }) =>
     limit(async () => {
       const { isAvailable, msg } = await checkDomainStatus(domain);
+      console.log(msg);
       if (!isAvailable) {
         await sendTelegramMessage(domain, msg);
       }
@@ -268,7 +273,7 @@ app.get('/check-own/:userId', async (req, res) => {
     const checks = userDomains.map(({ domain }) =>
       limit(async () => {
         const { isAvailable, msg } = await checkDomainStatus(domain);
-
+        console.log(msg);
         try {
           await fetch(
             `https://api.telegram.org/bot${
