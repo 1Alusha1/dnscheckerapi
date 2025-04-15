@@ -53,17 +53,56 @@ const providers = {
   MTS: ['134.17.4.251'],
 };
 
-async function resolveWithServer(domain, server) {
-  const resolver = new dns.Resolver();
-  resolver.setServers([server]);
+const checkSafe = async (domain) => {
+  const dto = {
+    threatInfo: {
+      threatTypes: [
+        'MALWARE',
+        'SOCIAL_ENGINEERING',
+        'UNWANTED_SOFTWARE',
+        'POTENTIALLY_HARMFUL_APPLICATION',
+      ],
+      platformTypes: ['ANY_PLATFORM'],
+      threatEntryTypes: ['URL'],
+      threatEntries: [{ url: domain }],
+    },
+  };
 
-  return new Promise((resolve, reject) => {
-    resolver.resolve4(domain, (err, addresses) => {
-      if (err) reject(err);
-      else resolve(addresses);
-    });
-  });
-}
+  const response = await fetch(
+    `https://safebrowsing.googleapis.com/v4/threatMatches:find?key=${process.env.GOOGLE_APIKEY}`,
+    {
+      method: 'POST',
+      body: JSON.stringify(dto),
+      headers: { application: 'json' },
+    }
+  );
+  const data = await response.json();
+
+  const types = {
+    MALWARE: 'ЗЛОУМЫШЛЕННИКИ',
+    SOCIAL_ENGINEERING: 'СОЦИАЛЬНАЯ ИНЖЕНЕРИЯ',
+    UNWANTED_SOFTWARE: 'НЕЖЕЛАТЕЛЬНОЕ ПРОГРАММНОЕ ОБЕСПЕЧЕНИЕ',
+    POTENTIALLY_HARMFUL_APPLICATION: 'ПОТЕНЦИАЛЬНО ВРЕДНОЕ ПРИМЕНЕНИЕ',
+  };
+
+  if (!Object.keys(data).length) {
+    return {
+      msg: `✅ Google Safe: ${domain} считаеться безопасным `,
+      isAvailable: true,
+    };
+  }
+
+  const type = data.matches.reduce((acc, type) => {
+    acc += types[type.threatType] + ' ';
+    return acc;
+  }, '');
+
+
+  return {
+    msg: `❌ Google Safe: ${domain} помечен как ${type} `,
+    isAvailable: false,
+  };
+};
 
 async function checkSSL(domain) {
   return new Promise((resolve) => {
@@ -90,7 +129,7 @@ async function checkSSL(domain) {
       const validTo = new Date(cert.valid_to);
 
       if (now < validFrom || now > validTo) {
-        msg = `❌ SSL: ${domain} — сертификат просрочен (срок: ${cert.valid_from} - ${cert.valid_to})`;
+        msg = `❌ SSL: ${domain} — сертификат просрочен`;
         socket.end();
         return resolve({ valid: false, msg });
       }
@@ -103,7 +142,7 @@ async function checkSSL(domain) {
     socket.on('error', (err) => {
       resolve({
         valid: false,
-        msg: `❌ SSL: ${domain} — ошибка SSL-соединения: ${err.message}`,
+        msg: `❌ SSL: ${domain} — ошибка SSL-соединения`,
       });
     });
 
@@ -140,30 +179,23 @@ async function checkDomainStatus(domain) {
 
     socket.on('error', (err) => {
       socket.destroy();
-      msg += `❌ Сокет: ${domain} недоступен (ошибка: ${err.message})\n`;
+      msg += `❌ Сокет: ${domain} недоступен \n`;
       resolve(false);
     });
 
     try {
       socket.connect(443, domain);
     } catch (err) {
-      msg += `❌ Ошибка сокет-подключения к ${domain}: ${err.message}\n`;
+      msg += `❌ Ошибка сокет-подключения к ${domain}\n`;
       resolve(false);
     }
   });
 
-  if (!socketCheck) {
-    isAvailable = false;
-    return { isAvailable, msg };
-  }
+  const googleSafe = await checkSafe(domain);
+  msg += googleSafe.msg + '\n';
 
   const sslCheck = await checkSSL(domain);
   msg += sslCheck.msg + '\n';
-
-  if (!sslCheck.valid) {
-    isAvailable = false;
-    return { isAvailable, msg };
-  }
 
   for (const [name, servers] of Object.entries(providers)) {
     const serverList = Array.isArray(servers) ? servers : [servers];
@@ -177,12 +209,25 @@ async function checkDomainStatus(domain) {
         msg += `❌ DNS: ${domain} не доступен через ${name}\n`;
       }
     }
-
     if (!providerSuccess) {
       isAvailable = false;
     }
   }
 
+  if (!socketCheck) {
+    isAvailable = false;
+    return { isAvailable, msg };
+  }
+
+  if (!googleSafe.isAvailable) {
+    isAvailable = false;
+    return { isAvailable, msg };
+  }
+
+  if (!sslCheck.valid) {
+    isAvailable = false;
+    return { isAvailable, msg };
+  }
   return { isAvailable, msg };
 }
 
